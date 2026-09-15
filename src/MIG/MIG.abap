@@ -254,7 +254,56 @@ FORM LOAD_AND_BUILD_QUEUE.
     MESSAGE 'STEP 2: 초기 타겟 큐 빌드 및 CBO 로그 연동 완료. 총 테스트 개수 : { LINES( GT_QUEUE ) } 개' TYPES 'S'.
 ENDFORM.
 
-FORM 
+FORM EXECUTE_PARALLEL_PROCESSING.
+    MESSAGE 'STEP3 : 병렬 프로세스 스케줄러 가동' TYPE 'S'.
+
+    WHILE GV_ACT_TASKS > 0 OR LINE_EXISTS( GT_QUEUE[ KEY SK1 components STATUS = ' ' ] ).
+        IF GV_ACT_TASKS < pa_p_max.
+            READ TABLE GT_QUEUE TRANSPORTING NO FIELDS WITH KEY SK1 components STATUS = ' '.
+            IF SY-SUBRC EQ 0.
+                DATA(LV_TABIX) = SY-TABIX.
+
+                GV_TASK_IDX = GV_TASK_IDX + 1.
+                DATA(LV_TASK_NAME) = CONV CHAR20( |TASK_{ GV_TASK_IDX }| ).
+
+                READ GT_QUEUE ASSIGNING FIELD-SYMBOL(<FS_QUEUE>) INDEX LV_TABIX USING KEY SK1.
+                <FS_QUEUE>-STATUS = 'R'.
+                <FS_QUEUE>-TASKNAME = LV_TASK_NAME.
+                GV_ACT_TASKS = GV_ACT_TASKS + 1.
+
+                " 프로세스가 실행을 시작하는 순간 상태를 'R'로 업데이트
+                UPDATE YTAB_COPA_LOG
+                   SET STATUS = 'R'
+                       TASKNAME = @LV_TASK_NAME,
+                       AENAM = @SY-UNAME,
+                       AEDAT = @SY-DATUM,
+                       AEZET = @SY-SY_UZEIT
+                WHERE STAB = @pa_stab
+                  AND TTAB = @PA_TTAB
+                  AND PERIO = @<FS_QUEUE>-PERIO
+                  AND PAOBJ_LOW = @<FS_QUEUE>-PAOBJ_LOW
+                  AND PAOBJ_HIGH = @<FS_QUEUE>-PAOBJ_HIGH
+                  AND SKIPS = @<FS_QUEUE>-SKIPS.
+
+                PERFORM CALL_BODS_RFC_ASYNC USING LV_TASK_NAME
+                                                  <FS_QUEUE>-PAOBJ_LOW
+                                                  <FS_QUEUE>-PA0BJ_HIGH
+                                                  <FS_QUEUE>-PERIO
+                                                  <FS_QUEUE>-SKIPS
+                                                  LV_TABIX.
+            ENDIF.
+        ENDIF.
+
+        IF GV_ACT_TASKS >= pa_p_max OR NOT LINE_EXISTS( GT_QUEUE[ KEY SK1 components STATUS = ' ' ] ).
+            COMMIT WORK.
+            WAIT UP TO 1 SECONDS.
+        ENDIF.
+    ENDWHILE.
+
+    PERFORM PRINT_SUMMARY_REPORT.
+ENDFORM.
+
+        
                     
 
 
