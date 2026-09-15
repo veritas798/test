@@ -361,7 +361,84 @@ CALL FUNCTION '/BODS/RFC_READ_TABLE2'
     ENDIF.
 ENDFORM.
 
+FORM CALLBACK_RFC_RESULT USING PV_TASK TYPE CLIKE.
+    DATA : LT_OUT128 TYPE TABLE OF /BODS/TAB128,
+           LT_OUT512 TYPE TABLE OF /BODS/TAB512,
+           LT_OUT2048 TYPE TABLE OF /BODS/TAB2048,
+           LT_OUT8192 TYPE TABLE OF /BODS/TAB8192,
+           LT_OUT30000 TYPE TABLE OF /BODS/TAB30000,
+           LV_OUT_TAB TYPE DD021-TABNAME,
+           LV_MSG TYPE CHAR255,
+           LV_LMSG TYPE CHAR50,
+           LV_SYS_MSG TYPE STRING.
+    FIELD-SYMBOLS : <LT_ACTIVE_BUFFER> TYPE TABLE.
 
+    REFRESH : LT_OUT128, LT_OUT512, LT_OUT2048, LT_OUT30000.
+    CLEAR : LV_OUT_TAB, LV_SYS_MSG.
+
+    RECEIVE RESULTS FROM FUNCTION '/BODS/RFC_READ_TABLE2'
+    IMPORTING
+        OUT_TABLE = LV_OUT_TAB
+    TABLES
+        TBLOUT128 = LT_OUT128
+        TBLOUT512 = LT_OUT512
+        TBLOUT2048 = LT_OUT2048
+        TBLOUT8192 = LT_OUT8192
+        TBLOUT30000 = LT_OUT30000
+    EXCEPTIONS
+        ...
+        OTHERS = 9.
+
+    DATA(LV_RFC_SUBRC) = SY-SUBRC.
+    READ TABLE GT_QUEUE WITH KEY TASKNAME = PV_TASK ASSIGNING FIELD-SYMBOF(<FS_1>).
+    IF SY-SUBRC EQ 0.
+        IF LV_RFC_SUBRC = 0 AND LV_OUT_TAB IS NOT INITIAL.
+            DATA(LV_BIND_TARGET) = |LT_{ LV_OUT_TAB+3 }|.
+            TRANSLATE LV_BIND_TARGET TO UPPER CASE.
+            ASSIGN (LV_BIND_TARGET) TO <LT_ACTIVE_BUFFER>.
+            IF SY-SUBRC = 0 AND <LT_ACTIVE_BUFFER> IS ASSIGNED.
+                DATA(LV_RECEIVED_LINES) = LINES( <LT_ACTIVE_BUFFER> ).
+                " 데이터가 존재 할 때만 저장 및 로그 출력
+                IF LV_RECEIVED_LINES > 0.
+                    MESSAGE |> [{ PV_TASK }] 데이터 패킷 { LV_RECEIVED_LINES } 건 수신 완료. 객체: { <FS_Q>-PAOBJ_LOW } ~ { <FS_Q>-PAOBJ_HIGH }| TYPE 'S'.
+                    PERFORM SAVE_TO_HANA_DB TABLES <LT_ACTIVE_BUFFER> USING PA_TTAB PV_TASK.
+                ENDIF.
+
+                "PA_ROWS 건 미만으로 깔끔하게 완료된 경우 최종 마감 동기화
+                <FS_Q>-STATUS = 'C'.
+                UPDATE YTAB_COPA_LOG
+                SET STATUS = 'C'
+                    AENAM = @SY-UNAME,
+                    AEDAT = @SY-DATUM,
+                    AEZET = @SY-UZEIT
+                WHERE STAB = @pa_stab
+                  AND TTAB = @PA_TTAB
+                  AND PERIO = @<FS_Q>-PERIO
+                  AND PAOBJ_LOW = @<FS_Q>-PAOBJ_LOW
+                  AND PAOBJ_HIGH = @<FS_Q>-PAOBJ_HIGH
+                  AND SKIPS = @<FS_Q>-SKIPS.            
+            ELSE.
+                MESSAGE |X [{ PV_TASK }] 결과 테이블 동적 매핑 실패! ({ LV_BIND_TARGET })|.
+                <FS_Q>-STATUS = 'E'.
+                UPDATE YTAB_COPA_LOG
+                SET STATUS = 'E'
+                    AENAM = @SY-UNAME,
+                    AEDAT = @SY-DATUM,
+                    AEZET = @SY-UZEIT
+                WHERE STAB = @pa_stab
+                  AND TTAB = @PA_TTAB
+                  AND PERIO = @<FS_Q>-PERIO
+                  AND PAOBJ_LOW = @<FS_Q>-PAOBJ_LOW
+                  AND PAOBJ_HIGH = @<FS_Q>-PAOBJ_HIGH
+                  AND SKIPS = @<FS_Q>-SKIPS.            
+            ENDIF.
+        ELSE.
+            <FS_Q>-RETRY_CNT = <FS_Q>-RETRY_CNT + 1.
+            IF SY-MSGID IS NOT INITIAL.
+                MESSAGE ID SY-MSGID TYPE 'S' NUMBER SY-MSGNO WITH SY-MSGV1 SY-MSGV2 SY-MSGV3 SY-MSGV4 INTO LV_SYS_MSG.
+            ENDIF.
+            
+ENDFORM.
 
 
         
