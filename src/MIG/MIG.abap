@@ -277,7 +277,7 @@ FORM EXECUTE_PARALLEL_PROCESSING.
                        TASKNAME = @LV_TASK_NAME,
                        AENAM = @SY-UNAME,
                        AEDAT = @SY-DATUM,
-                       AEZET = @SY-SY_UZEIT
+                       AEZET = @SY-UZEIT
                 WHERE STAB = @pa_stab
                   AND TTAB = @PA_TTAB
                   AND PERIO = @<FS_QUEUE>-PERIO
@@ -302,6 +302,70 @@ FORM EXECUTE_PARALLEL_PROCESSING.
 
     PERFORM PRINT_SUMMARY_REPORT.
 ENDFORM.
+
+FORM CALL_BODS_RFC_ASYNC USING PV_TASK TYPE CHAR20  
+                               PV_PLOW TYPE numc10
+                               PV_PHIGH TYPE NUMC10
+                               PV_PERIO TYPE JAHRPER
+                               PV_SKIPS TYPE i
+                               PV_Q_IDX TABIX I.
+
+DATA : LT_OPTIONS TYPE TABLE OF RFC_DB_OPT,
+       LT_FILEDS TYPE TABLE OF RFC_DB_FLD,
+       LV_MSG TYPE CHAR255,
+       LV_SYS_MSG TYPE STRING.
+
+PERFORM SET_FIELDS TABLES LT_FIELDS.
+
+APPEND VALUE #( TEXT = |PAOBJNR BETWEEN '{ PV_PLOW }' AND '{ OV/0PHIGH }'| ) TO LT_OPTIONS.
+APPEND VALUE #( TEXT = |AND PERIO = '{ PV_PERIO }'| ) TO LT_OPTIONS.
+
+CALL FUNCTION '/BODS/RFC_READ_TABLE2'
+    DESTINATION pa_rfcdt
+    STARTING NEW TASK PV_TASK
+    PERFORMING CALLBACK_RFC_RESULT ON END OF TASK
+    EXPORTING
+        QUERY_TABLE = pa_stab
+        DELIMITER = '|'
+        NO_DATA = ' '
+        ROWSKIPS = 0
+        WORCOUNT = 0
+    TABLES
+        OPTIONS = LT_OPRIONS
+        FIELDS = LT_FIELDS
+    EXCEPTIONS
+        ....
+        OTHERS = 9.
+    
+    IF SY-SUBRC <> 0.
+        IF SY-MSGID IS NOT INITIAL.
+            MESSAGE ID SY-MSGID TYPE 'E' NUMBER SY-MSGNO WITH SY-MSGV1 SY-MSGV2 SY-MSGV3 SY-MSGV4 .
+        ENDIF.
+
+        READ TABLE GT_QUEUE ASSIGNING FIELD-SYMBOL(<FS_Q>) INDEX PV_Q_IDX.
+        <FS_Q>-STATUS = ' '.
+        GV_ACT_TASKS = GV_ACT_TASKS - 1.
+
+        " 호출 단계 실패 시에도 DB 자원 원복 마킹
+        UPDATE YTAB_COPA_LOG
+        SET STATUS = ' '
+            AENAM = @SY-UNAME,
+            AEDAT = @SY-DATUM,
+            AEZET = @SY-UZEIT
+        WHERE STAB = @pa_stab
+          AND TTAB = @PA_TTAB
+          AND PERIO = @<FS_Q>-PERIO
+          AND PAOBJ_LOW = @<FS_Q>-PAOBJ_LOW
+          AND PAOBJ_HIGH = @<FS_Q>-PAOBJ_HIGH
+          AND SKIPS = @<FS_Q>-SKIPS.            
+    ENDIF.
+ENDFORM.
+
+
+
+
+        
+
 
         
                     
